@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Define the shape as a rectangle -->
+
+    <!-- Define rounded corners -->
+    <corners android:radius="22dp" />
+
+    <!-- Add border (optional) -->
+    <stroke
+        android:width="2dp"
+        />
+
+    <!-- Add padding (optional) -->
+    <padding
+        android:left="8dp"
+        android:top="8dp"
+        android:right="8dp"
+        android:bottom="8dp" />
+</shape>
