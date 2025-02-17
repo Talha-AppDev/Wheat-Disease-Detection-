@@ -4,7 +4,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitClient {
-    private const val BASE_URL = "https://talha-xyz32-WheatDiseaseDiagnoses.hf.space/predict"
+    private const val BASE_URL = "https://talha-xyz32-WheatDiseaseDiagnoses.hf.space/"
 
     val apiService: ApiService by lazy {
         Retrofit.Builder()

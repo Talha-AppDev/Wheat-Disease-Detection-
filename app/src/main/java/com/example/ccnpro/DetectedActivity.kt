@@ -1,84 +1,158 @@
 package com.example.ccnpro
 
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.ccnpro.databinding.ActivityDetectedBinding
 import com.example.ccnpro.network.RetrofitClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 class DetectedActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityDetectedBinding
+    private var imageFilePath: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityDetectedBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Get the file path of the captured image passed from GetimgActivity.
-        val imagePath: String? = intent.getStringExtra("IMAGE_PATH")
+        // Initialize UI elements visibility.
+        binding.progressBar.visibility = View.VISIBLE
+        binding.imageView.visibility = View.GONE
+        binding.resultTextView.visibility = View.GONE
 
-        if (imagePath != null) {
-            val imageFile = File(imagePath)
+        imageFilePath = intent.getStringExtra("IMAGE_PATH")
+        imageFilePath?.let { path ->
+            val imageFile = File(path)
             if (imageFile.exists()) {
-                // Decode and display the image.
-                val finalBitmap: Bitmap = BitmapFactory.decodeFile(imageFile.absolutePath)
-                binding.imageView.setImageBitmap(finalBitmap)
-
-                // Post the image to the API using Retrofit.
-                postImageWithRetrofit(imageFile)
+                loadAndDisplayImage(path)
+                uploadImageToApi(imageFile)
             } else {
-                binding.resultTextView.text = "Image file does not exist."
+                handleErrorState("Image file not found")
             }
-        } else {
-            binding.resultTextView.text = "No image data received."
+        } ?: run {
+            handleErrorState("No image path provided")
         }
     }
 
-    /**
-     * Posts the given image file to the API endpoint using Retrofit.
-     */
-    private fun postImageWithRetrofit(imageFile: File) {
-        // Create the multipart body part from the image file.
-        val multipartBody = createMultipartBody(imageFile)
+    private fun loadAndDisplayImage(filePath: String) {
+        try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+                BitmapFactory.decodeFile(filePath, this)
+                inSampleSize = calculateInSampleSize(this, 1024, 1024)
+                inJustDecodeBounds = false
+            }
 
-        // Launch a coroutine to execute the network request.
+            BitmapFactory.decodeFile(filePath, options)?.let { bitmap ->
+                binding.imageView.apply {
+                    visibility = View.VISIBLE
+                    setImageBitmap(bitmap)
+                }
+            } ?: handleErrorState("Failed to decode image")
+        } catch (e: Exception) {
+            handleErrorState("Error loading image: ${e.localizedMessage}")
+        }
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.run { outHeight to outWidth }
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    private fun uploadImageToApi(imageFile: File) {
         lifecycleScope.launch {
             try {
-                val response = RetrofitClient.apiService.uploadImage(multipartBody)
+                // Show loading state.
+                binding.progressBar.visibility = View.VISIBLE
+                binding.resultTextView.visibility = View.GONE
+
+                val mediaType = when (imageFile.extension.lowercase(Locale.getDefault())) {
+                    "jpg", "jpeg" -> "image/jpeg"
+                    "png" -> "image/png"
+                    else -> "image/*"
+                }.toMediaTypeOrNull()
+
+                val requestFile = imageFile.asRequestBody(mediaType)
+                // Ensure that the form-data key "file" matches what your API expects.
+                val imagePart = MultipartBody.Part.createFormData("file", imageFile.name, requestFile)
+
+                val response = withContext(Dispatchers.IO) {
+                    RetrofitClient.apiService.uploadImage(imagePart)
+                }
+
                 if (response.isSuccessful) {
-                    val apiResponse = response.body()
-                    // Update the UI on the main thread.
-                    runOnUiThread {
-                        binding.resultTextView.text = "Prediction: ${apiResponse?.prediction}"
-                    }
+                    // Extract the 'disease' field from the response.
+                    handleApiResponse(true, response.body()?.disease)
                 } else {
-                    runOnUiThread {
-                        binding.resultTextView.text = "Error: ${response.errorBody()?.string()}"
-                    }
+                    // Get error details from the API.
+                    val errorDetails = response.errorBody()?.string() ?: response.message()
+                    handleApiResponse(false, errorDetails)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    binding.resultTextView.text = "Exception: ${e.localizedMessage}"
-                }
+                handleNetworkError(e)
+            } finally {
+                binding.progressBar.visibility = View.GONE
+                binding.resultTextView.visibility = View.VISIBLE
             }
         }
     }
 
     /**
-     * Converts a File into a MultipartBody.Part suitable for a multipart/form-data request.
+     * If success is true, message should contain the disease.
+     * If false, message is the error details.
      */
-    private fun createMultipartBody(file: File, formFieldName: String = "file"): MultipartBody.Part {
-        val mediaType = "image/png".toMediaTypeOrNull()  // Adjust media type if needed.
-        val requestBody = file.asRequestBody(mediaType)
-        return MultipartBody.Part.createFormData(formFieldName, file.name, requestBody)
+    private fun handleApiResponse(success: Boolean, message: String?) {
+        runOnUiThread {
+            if (success) {
+                val resultText = message?.let { "Disease: $it" } ?: "No prediction available"
+                binding.resultTextView.text = resultText
+            } else {
+                binding.resultTextView.text = "API request failed: $message"
+            }
+        }
+    }
+
+    private fun handleNetworkError(exception: Exception) {
+        runOnUiThread {
+            val errorMessage = when (exception) {
+                is java.net.ConnectException -> "Connection failed. Check your internet"
+                is java.net.SocketTimeoutException -> "Request timed out"
+                else -> "Error: ${exception.localizedMessage}"
+            }
+            binding.resultTextView.text = errorMessage
+        }
+    }
+
+    private fun handleErrorState(message: String) {
+        runOnUiThread {
+            binding.imageView.apply {
+                visibility = View.VISIBLE
+                setImageResource(android.R.drawable.ic_dialog_alert)
+            }
+            binding.resultTextView.text = message
+            binding.progressBar.visibility = View.GONE
+            binding.resultTextView.visibility = View.VISIBLE
+        }
     }
 }

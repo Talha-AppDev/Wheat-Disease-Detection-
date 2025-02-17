@@ -7,7 +7,7 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 
 data class ApiResponse(
-    val prediction: String
+    val disease: String?
 )
 
 interface ApiService {
@@ -17,3 +17,4 @@ interface ApiService {
         @Part file: MultipartBody.Part
     ): Response<ApiResponse>
 }
+
